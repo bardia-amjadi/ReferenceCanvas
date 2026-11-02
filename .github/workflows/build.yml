@@ -1,0 +1,120 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_FLAGS: --console=plain --stacktrace --no-daemon
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      # The wrapper JAR is a binary that is generated once and then committed
+      # (run `gradle wrapper --gradle-version 8.9` locally). Until it exists,
+      # CI generates it so the same ./gradlew commands work everywhere.
+      - name: Generate Gradle wrapper if it is not committed
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            gradle wrapper --gradle-version 8.9
+          fi
+
+      - name: Validate Gradle wrapper
+        if: hashFiles('gradle/wrapper/gradle-wrapper.jar') != ''
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Validate Gradle configuration
+        run: ./gradlew help $GRADLE_FLAGS
+
+      - name: Compile Kotlin
+        run: ./gradlew :app:compileDebugKotlin $GRADLE_FLAGS
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest $GRADLE_FLAGS
+
+      - name: Lint
+        run: ./gradlew :app:lintDebug $GRADLE_FLAGS
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug $GRADLE_FLAGS
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-canvas-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  instrumented:
+    # Emulator tests (Room integrity). Manual only: slow and not yet exercised in CI.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Generate Gradle wrapper if it is not committed
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            gradle wrapper --gradle-version 8.9
+          fi
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: ./gradlew :app:connectedDebugAndroidTest --console=plain --stacktrace
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-reports
+          path: app/build/reports/androidTests/
+          if-no-files-found: ignore
