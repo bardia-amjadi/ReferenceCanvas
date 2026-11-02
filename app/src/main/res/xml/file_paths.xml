@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Managed reference files: read-only grants to other apps -->
+    <files-path name="references" path="references/" />
+    <!-- Camera captures: copied into managed storage, then deleted -->
+    <cache-path name="capture" path="capture/" />
+</paths>
